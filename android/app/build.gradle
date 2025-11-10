@@ -78,6 +78,10 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.derma_02"
+    packagingOptions {
+        pickFirst '**/libreanimated.so'
+    }
+
     defaultConfig {
         applicationId "com.derma_02"
         minSdkVersion rootProject.ext.minSdkVersion
