@@ -1,7 +1,8 @@
 # OSX
 #
 .DS_Store
-
+*.pte
+*.onnx
 # Xcode
 #
 build/
@@ -73,3 +74,5 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+
