@@ -5,25 +5,15 @@ import ImageResizer from 'react-native-image-resizer';
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 
-// Classes do dataset HAM10000
+// Classificação Binária
 const CLASSES = [
-  "Queratose Actínica",
-  "Carcinoma Basocelular",
-  "Queratose Benigna",
-  "Dermatofibroma",
-  "Melanoma",
-  "Nevo Melanocítico",
-  "Lesão Vascular",
+  "Benigno",
+  "Maligno",
 ];
 
 const PRIORIDADE = {
-  "Melanoma": "Alta",
-  "Carcinoma Basocelular": "Média",
-  "Queratose Actínica": "Média",
-  "Dermatofibroma": "Baixa",
-  "Queratose Benigna": "Baixa",
-  "Nevo Melanocítico": "Baixa",
-  "Lesão Vascular": "Baixa",
+  "Benigno": "Baixa",
+  "Maligno": "Alta",
 };
 
 /**
@@ -33,9 +23,13 @@ const PRIORIDADE = {
  */
 export async function imageUriToTensor(uri) {
   try {
-    console.log('[Tensor] Iniciando conversão da imagem');
-    
+    const startTime = Date.now();
+    console.log('=== [Tensor] INÍCIO DA CONVERSÃO ===');
+    console.log('[Tensor] URI da imagem:', uri);
+    console.log('[Tensor] Timestamp:', new Date().toISOString());
+
     // 1. Redimensionar imagem com react-native-image-resizer
+    console.log('[Tensor] Passo 1/4: Redimensionando imagem para 224x224...');
     const resized = await ImageResizer.createResizedImage(
       uri,
       224,
@@ -44,20 +38,34 @@ export async function imageUriToTensor(uri) {
       90,     // Qualidade (0-100)
       0       // Rotação
     );
+    console.log('[Tensor] ✓ Imagem redimensionada:', resized.uri);
 
     // 2. Ler imagem como base64 com react-native-fs
+    console.log('[Tensor] Passo 2/4: Lendo imagem como base64...');
     const base64 = await RNFS.readFile(resized.uri, 'base64');
+    console.log('[Tensor] ✓ Base64 lido, tamanho:', base64.length, 'bytes');
 
     // 3. Decodificar pixels (implementação simulada mantida)
+    console.log('[Tensor] Passo 3/4: Decodificando pixels...');
     const pixels = await decodeBase64ToPixels(base64);
+    console.log('[Tensor] ✓ Pixels decodificados, array size:', pixels.length);
 
     // 4. Normalizar e converter para NCHW
+    console.log('[Tensor] Passo 4/4: Normalizando e formatando tensor...');
     const tensor = normalizeAndFormatTensor(pixels);
-    
-    console.log('[Tensor] Conversão concluída');
+
+    const elapsedTime = Date.now() - startTime;
+    console.log('[Tensor] ✓ Tensor criado:');
+    console.log('[Tensor]   - Shape:', tensor.sizes);
+    console.log('[Tensor]   - ScalarType:', tensor.scalarType, '(FLOAT)');
+    console.log('[Tensor]   - DataPtr length:', tensor.dataPtr.length);
+    console.log('[Tensor]   - Tempo total:', elapsedTime, 'ms');
+    console.log('=== [Tensor] CONVERSÃO CONCLUÍDA ===\n');
     return tensor;
   } catch (error) {
-    console.error('[Tensor] Erro na conversão:', error);
+    console.error('=== [Tensor] ERRO NA CONVERSÃO ===');
+    console.error('[Tensor] Erro:', error);
+    console.error('[Tensor] Stack:', error.stack);
     throw new Error('Falha ao processar imagem');
   }
 }
@@ -90,9 +98,10 @@ async function decodeBase64ToPixels(base64) {
 
 /**
  * Normaliza pixels e formata para NCHW
+ * Retorna TensorPtr para compatibilidade com ExecutorchModule
  */
 function normalizeAndFormatTensor(pixels) {
-  const tensor = new Float32Array(1 * 3 * 224 * 224);
+  const dataPtr = new Float32Array(1 * 3 * 224 * 224);
   let idx = 0;
 
   // NCHW: Batch, Channel, Height, Width
@@ -102,58 +111,104 @@ function normalizeAndFormatTensor(pixels) {
         const pixelIdx = (h * 224 + w) * 3 + c;
         const value = pixels[pixelIdx] / 255.0;
         const normalized = (value - MEAN[c]) / STD[c];
-        tensor[idx++] = normalized;
+        dataPtr[idx++] = normalized;
       }
     }
   }
 
-  return tensor;
+  // Retornar TensorPtr com formato esperado pelo ExecutorchModule
+  return {
+    dataPtr: dataPtr,
+    sizes: [1, 3, 224, 224], // [batch, channels, height, width]
+    scalarType: 6, // ScalarType.FLOAT
+  };
 }
 
 /**
  * Processa saída do modelo (logits) e retorna classificação
+ * Aceita TensorPtr ou array
+ * CLASSIFICAÇÃO BINÁRIA: Benigno vs Maligno
  */
 export function processOutputTensor(outputTensor) {
   try {
-    console.log('[Tensor] Processando saída do modelo');
-    
-    const logits = Array.isArray(outputTensor) 
-      ? outputTensor 
-      : Array.from(outputTensor);
-    
+    const startTime = Date.now();
+    console.log('=== [Tensor] INÍCIO DO PROCESSAMENTO DE SAÍDA ===');
+    console.log('[Tensor] Timestamp:', new Date().toISOString());
+
+    // Se for TensorPtr, extrair o dataPtr
+    let logits;
+    if (outputTensor && outputTensor.dataPtr) {
+      console.log('[Tensor] Tipo de entrada: TensorPtr');
+      console.log('[Tensor] Shape da saída:', outputTensor.sizes);
+      logits = Array.from(outputTensor.dataPtr);
+    } else if (Array.isArray(outputTensor)) {
+      console.log('[Tensor] Tipo de entrada: Array');
+      logits = outputTensor;
+    } else {
+      console.log('[Tensor] Tipo de entrada: TypedArray ou outro');
+      logits = Array.from(outputTensor);
+    }
+
+    console.log('[Tensor] Logits brutos (raw model output):', logits);
+    console.log('[Tensor] Número de classes:', logits.length);
+
+    // Validar que temos exatamente 2 saídas para classificação binária
+    if (logits.length !== 2) {
+      console.warn(`[Tensor] ⚠️ AVISO: Esperado 2 logits (binário), recebido ${logits.length}`);
+    }
+
     // Aplicar softmax
+    console.log('[Tensor] Aplicando função softmax...');
     const maxLogit = Math.max(...logits);
+    console.log('[Tensor] Max logit:', maxLogit);
+
     const expScores = logits.map(x => Math.exp(x - maxLogit));
+    console.log('[Tensor] Exp scores:', expScores);
+
     const sumExp = expScores.reduce((a, b) => a + b, 0);
+    console.log('[Tensor] Sum exp:', sumExp);
+
     const probabilities = expScores.map(x => x / sumExp);
-    
+    console.log('[Tensor] Probabilidades após softmax:', probabilities);
+
     // Encontrar classe com maior probabilidade
     let maxProb = -1;
     let maxIndex = -1;
-    
+
     probabilities.forEach((prob, idx) => {
+      console.log(`[Tensor] Classe ${CLASSES[idx]}: ${(prob * 100).toFixed(2)}%`);
       if (prob > maxProb) {
         maxProb = prob;
         maxIndex = idx;
       }
     });
-    
+
     const classificacao = CLASSES[maxIndex] || "Desconhecida";
     const confianca = `${(maxProb * 100).toFixed(2)}%`;
-    
-    console.log(`[Tensor] Classificação: ${classificacao} (${confianca})`);
-    
+    const prioridade = PRIORIDADE[classificacao] || "Baixa";
+
+    const elapsedTime = Date.now() - startTime;
+
+    console.log('[Tensor] ✓ RESULTADO FINAL:');
+    console.log('[Tensor]   - Classificação:', classificacao);
+    console.log('[Tensor]   - Confiança:', confianca);
+    console.log('[Tensor]   - Prioridade:', prioridade);
+    console.log('[Tensor]   - Tempo de processamento:', elapsedTime, 'ms');
+    console.log('=== [Tensor] PROCESSAMENTO CONCLUÍDO ===\n');
+
     return {
       classificacao,
       confianca,
-      prioridade: PRIORIDADE[classificacao] || "Baixa",
+      prioridade,
       probabilidades: probabilities.map((p, i) => ({
         classe: CLASSES[i],
         prob: (p * 100).toFixed(2) + '%'
       })).sort((a, b) => parseFloat(b.prob) - parseFloat(a.prob))
     };
   } catch (error) {
-    console.error('[Tensor] Erro no processamento:', error);
+    console.error('=== [Tensor] ERRO NO PROCESSAMENTO ===');
+    console.error('[Tensor] Erro:', error);
+    console.error('[Tensor] Stack:', error.stack);
     throw new Error('Falha no pós-processamento');
   }
 }
